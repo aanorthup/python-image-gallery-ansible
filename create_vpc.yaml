@@ -1,0 +1,223 @@
+---
+- hosts: localhost
+  gather_facts: no
+  module_defaults:
+    group/aws:
+      region: us-east-1
+
+  tasks:
+    - name: Create VPC
+      ec2_vpc_net:
+        name: Module5
+        cidr_block: 10.10.0.0/16
+        tags:
+          Module: 5
+        state: present
+        region: "us-east-1"
+      register: vpc
+
+    - name: Create public subnet
+      ec2_vpc_subnet:
+        vpc_id: "{{ vpc.vpc.id }}"
+        tags:
+          Name: Module5 public subnet
+          Module: 5
+        cidr: 10.10.0.0/24
+        state: present
+      register: pubsub
+
+    - name: Create private subnet
+      ec2_vpc_subnet:
+        vpc_id: "{{ vpc.vpc.id }}"
+        az: us-east-1a
+        tags:
+          Name: Module5 private subnet
+          Module: 5
+        cidr: 10.10.1.0/24
+        state: present
+      register: privatesub
+
+    - name: Create private subnet 2
+      ec2_vpc_subnet:
+        vpc_id: "{{ vpc.vpc.id }}"
+        az: us-east-1b
+        tags:
+          Name: Module5 private subnet 2
+          Module: 5
+        cidr: 10.10.2.0/24
+        state: present
+      register: privatesub2
+
+    - name: Create internet gateway
+      ec2_vpc_igw:
+        vpc_id: "{{ vpc.vpc.id }}"
+        tags:
+          Name: Module5-igw
+        state: present
+      register: igw
+
+    - name: Create NAT gateway
+      ec2_vpc_nat_gateway:
+        subnet_id: "{{ pubsub.subnet.id }}"
+        wait: yes
+        if_exist_do_not_create: true
+        tags:
+          Name: module5-nat
+        state: present
+      register: nat5
+
+    - name: Create public route table
+      ec2_vpc_route_table:
+        vpc_id: "{{ vpc.vpc.id }}"
+        tags:
+          Name: prt5
+        subnets:
+          - "{{ pubsub.subnet.id }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ igw.gateway_id }}"
+        state: present
+      register: publicrt
+
+    - name: Create private route table
+      ec2_vpc_route_table:
+        vpc_id: "{{ vpc.vpc.id }}"
+        tags:
+          Name: module5-private-rtb
+        subnets:
+          - "{{ privatesub.subnet.id }}"
+          - "{{ privatesub2.subnet.id }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ nat5.nat_gateway_id }}"
+        state: present
+
+    - name: Create Postgres SG tag
+      ec2_group:
+        name: m5-postgres-sg-tag
+        description: Allow postgres connections tags
+        vpc_id: "{{ vpc.vpc.id }}"
+        rules:
+          - proto: all
+            cidr_ip: 0.0.0.0/0
+        rules_egress:
+          - proto: tcp
+            ports:
+              - 80
+              - 443
+              - 5432
+              - 8080
+            cidr_ip: 10.10.0.0/16
+        state: present
+      register: postgresSGTag
+
+    - name: Create Postgres SG
+      ec2_group:
+        name: m5-postgres-sg
+        description: Allow postgres connections
+        vpc_id: "{{ vpc.vpc.id }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 5432
+              - 8080
+            group_id: "{{ postgresSGTag.group_id }}"
+          - proto: tcp
+            ports:
+              - 443
+            cidr_ip: 0.0.0.0/0
+        rules_egress:
+          - proto: all
+            cidr_ip: 0.0.0.0/0
+        state: present
+      register: postgresSG
+
+    - name: Create Postgres SG tag
+      ec2_group:
+        name: m5-postgres-sg-tag
+        description: Allow postgres connections tags
+        vpc_id: "{{ vpc.vpc.id }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 5432
+            group_id: "{{ postgresSG.group_id }}"
+        rules_egress:
+          - proto: tcp
+            ports:
+              - 5432
+            group_id: "{{ postgresSG.group_id }}"
+          - proto: tcp
+            ports:
+              - 80
+              - 443
+              - 8080
+            cidr_ip: 10.10.0.0/16
+        state: present
+      register: postgresSGTag
+
+    - name: Create nginx security group
+      ec2_group:
+        name: M5-nginx-sg
+        description: nginx security group
+        vpc_id: "{{ vpc.vpc.id }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 22
+              - 80
+              - 443
+              - 1024 - 65535
+            cidr_ip: 0.0.0.0/0
+        tags:
+          Name: m5-nginx-sg
+        state: present
+      register: nginx_sg
+
+    - name: Create public ACL
+      ec2_vpc_nacl:
+        vpc_id: "{{ vpc.vpc.id }}"
+        name: m5pubacl
+        region: us-east-1
+        subnets: ["{{ pubsub.subnet.id }}"]
+        ingress:
+          - [100, tcp, 'allow', '68.119.93.72/32', null, null, 5000, 5000 ]
+          - [200, tcp, 'allow', '24.239.105.213/32', null, null, 5000, 5000 ]
+          - [300, tcp, 'allow', '24.88.147.20/32', null, null, 5000, 5000 ]
+          - [400, tcp, 'allow', '68.119.93.72/32', null, null, 80, 80 ]
+          - [500, tcp, 'allow', '24.239.105.213/32', null, null, 80, 80 ]
+          - [600, tcp, 'allow', '24.88.147.20/32', null, null, 80, 80 ]
+          - [700, tcp, 'allow', '68.119.93.72/32', null, null, 443, 443 ]
+          - [800, tcp, 'allow', '24.239.105.213/32', null, null, 443, 443 ]
+          - [900, tcp, 'allow', '24.88.147.20/32', null, null, 443, 443 ]
+          - [1000, tcp, 'allow', '0.0.0.0/0', null, null, 22, 22 ]
+          - [1100, tcp, 'allow', '0.0.0.0/0', null, null, 1024, 65535 ]
+        egress:
+          - [100, tcp, 'allow', '0.0.0.0/0', null, null, 80, 80]
+          - [200, tcp, 'allow', '0.0.0.0/0', null, null, 443, 443 ]
+          - [300, tcp, 'allow', '0.0.0.0/0', null, null, 22, 22 ]
+          - [400, tcp, 'allow', '0.0.0.0/0', null, null, 1024, 65535 ]
+        state: present
+      register: pubacl
+
+    - name: Create private ACL
+      ec2_vpc_nacl:
+        vpc_id: "{{ vpc.vpc.id }}"
+        name: m5privacl
+        region: us-east-1
+        subnets: ["{{ privatesub.subnet.id }}"]
+        ingress:
+          - [100, tcp, 'allow', '10.0.0.0/16', null, null, 443, 443]
+          - [200, tcp, 'allow', '10.0.0.0/16', null, null, 5432, 5432]
+          - [300, tcp, 'allow', '10.0.0.0/16', null, null, 1024, 65535]
+        egress:
+          - [ 100, tcp, 'allow', '10.0.0.0/16', null, null, 443, 443 ]
+          - [ 200, tcp, 'allow', '10.0.0.0/16', null, null, 5432, 5432 ]
+          - [ 300, tcp, 'allow', '10.0.0.0/16', null, null, 1024, 65535 ]
+        state: present
+      register: privacl
+
+
+
+
+

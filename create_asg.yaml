@@ -1,0 +1,28 @@
+---
+- hosts: localhost
+  gather_facts: no
+  module_defaults:
+    group/aws:
+      region: us-east-1
+
+  tasks:
+
+    - name: Create autoscaling group
+      ec2_asg:
+        name: Mod5-asg
+        launch_template:
+          launch_template_name: Mod5-lt
+        vpc_zone_identifier:
+          - "{{ pubsub.subnet.id }}"
+        target_group_arns:
+          - "{{ m5tg.target_group_arn }}"
+        health_check_period: 300
+        wait_for_instances: True
+        wait_timeout: 300
+        min_size: 1
+        max_size: 4
+        desired_capacity: 2
+        tags:
+          - Name: mod5asg
+        state: present
+      register: asg

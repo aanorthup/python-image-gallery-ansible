@@ -1,0 +1,38 @@
+---
+- hosts: localhost
+  gather_facts: no
+  module_defaults:
+    group/aws:
+      region: us-east-1
+
+  tasks:
+    - name: Create rds subnet group
+      rds_subnet_group:
+        name: mod5-private-dbs-sub
+        description: Private subnets for database
+        subnets:
+          - "{{ privatesub.subnet.id }}"
+          - "{{ privatesub2.subnet.id }}"
+        state: present
+      register: dbsub
+
+
+    - name: Create postgres database
+      rds_instance:
+        engine: postgres
+        engine_version: '13.4'
+        db_instance_identifier: m5-db
+        instance_type: db.t3.micro
+        master_username: postgres
+        master_user_password: databasepass
+        vpc_security_group_ids:
+          - "{{ postgresSG.group_id }}"
+        db_subnet_group_name: mod5-private-dbs-sub
+        multi_az: no
+        creation_source: snapshot
+        snapshot_identifier: arn:aws:rds:us-east-1:813633464346:snapshot:ig-db-snap
+        db_snapshot_identifier: arn:aws:rds:us-east-1:813633464346:snapshot:ig-db-snap
+        apply_immediately: yes
+        state: present
+      register: database
+
